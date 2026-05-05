@@ -1,0 +1,11 @@
+customer_id,email,orders_count,total_spent
+44.0,user44@example.com,3,30203.22
+10.0,user10@example.com,3,25054.4
+114.0,user114@example.com,4,24156.38
+335.0,user335@example.com,5,22803.45
+204.0,user204@example.com,4,21745.49
+33.0,user33@example.com,4,21564.06
+208.0,user208@example.com,3,21129.75
+111.0,user111@example.com,2,20527.57
+323.0,user323@example.com,3,20349.01
+89.0,user89@example.com,4,20332.38
