@@ -9,13 +9,11 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 DB_URL = os.getenv('DB_URL', 'postgresql://user:password@db:5432/homework')
 
 def run_etl():
-    logging.info("--- Завантаження даних ---")
     cust_raw = pd.read_csv('data/customers.csv')
     prod_raw = pd.read_csv('data/products.csv')
     ord_raw = pd.read_csv('data/orders.csv')
     items_raw = pd.read_csv('data/order_items.csv')
 
-    logging.info("--- Очищення даних ---")
     df_customers = cleaner.clean_customers(cust_raw)
     df_products = cleaner.clean_products(prod_raw)
     df_orders = cleaner.clean_orders(ord_raw, df_customers['customer_id'])
@@ -23,24 +21,20 @@ def run_etl():
 
     engine = create_engine(DB_URL)
 
-    logging.info("--- Очищення старих об'єктів у БД ---")
     with engine.begin() as conn:
-        # Видаляємо всі в'юхи (views), щоб вони не блокували заміну таблиць
         conn.execute(text("DROP VIEW IF EXISTS analytics_sales_by_category CASCADE;"))
         conn.execute(text("DROP VIEW IF EXISTS report_revenue_by_category CASCADE;"))
         conn.execute(text("DROP VIEW IF EXISTS report_monthly_stats CASCADE;"))
         conn.execute(text("DROP VIEW IF EXISTS report_top_customers CASCADE;"))
 
-    logging.info("--- Завантаження в базу PostgreSQL ---")
     with engine.begin() as conn:
         df_customers.to_sql('customers', conn, if_exists='replace', index=False)
         df_products.to_sql('products', conn, if_exists='replace', index=False)
         df_orders.to_sql('orders', conn, if_exists='replace', index=False)
         df_items.to_sql('order_items', conn, if_exists='replace', index=False)
 
-    logging.info("--- Створення аналітичних звітів ---")
     with engine.begin() as conn:
-        # 1. Виручка по категоріях
+        # Виручка по категоріях
         conn.execute(text("""
             CREATE VIEW report_revenue_by_category AS
             SELECT p.category, ROUND(SUM(i.quantity * p.price)::numeric, 2) as total_revenue
@@ -49,7 +43,7 @@ def run_etl():
             GROUP BY 1 ORDER BY 2 DESC;
         """))
 
-        # 2. Щомісячна динаміка
+        # Щомісячна динаміка
         conn.execute(text("""
             CREATE VIEW report_monthly_stats AS
             SELECT 
@@ -63,7 +57,7 @@ def run_etl():
             GROUP BY 1 ORDER BY 1;
         """))
 
-        # 3. ТОП-10 клієнтів
+        # ТОП-10 клієнтів
         conn.execute(text("""
             CREATE VIEW report_top_customers AS
             SELECT 
@@ -77,13 +71,22 @@ def run_etl():
             GROUP BY 1, 2 ORDER BY 4 DESC LIMIT 10;
         """))
 
-    # Експорт у CSV
     os.makedirs('output', exist_ok=True)
-    pd.read_sql("SELECT * FROM report_revenue_by_category", engine).to_csv('output/revenue_by_category.csv', index=False)
-    pd.read_sql("SELECT * FROM report_monthly_stats", engine).to_csv('output/monthly_stats.csv', index=False)
-    pd.read_sql("SELECT * FROM report_top_customers", engine).to_csv('output/top_customers.csv', index=False)
+    os.makedirs('analytics', exist_ok=True)
     
-    logging.info("Аналітичні звіти збережено в папку 'output/'")
+    # експорт очищених таблиць у папку 'output'
+    df_customers.to_csv('output/cleaned_customers.csv', index=False)
+    df_products.to_csv('output/cleaned_products.csv', index=False)
+    df_orders.to_csv('output/cleaned_orders.csv', index=False)
+    df_items.to_csv('output/cleaned_order_items.csv', index=False)
+    logging.info("Очищені дані збережено в 'output/'")
+    
+    # експорт аналітичних звітів у папку 'analytics'
+    pd.read_sql("SELECT * FROM report_revenue_by_category", engine).to_csv('analytics/revenue_by_category.csv', index=False)
+    pd.read_sql("SELECT * FROM report_monthly_stats", engine).to_csv('analytics/monthly_stats.csv', index=False)
+    pd.read_sql("SELECT * FROM report_top_customers", engine).to_csv('analytics/top_customers.csv', index=False)
+    logging.info("Аналітичні звіти збережено в 'analytics/'")
+    
     logging.info("ETL ПРОЦЕС ЗАВЕРШЕНО УСПІШНО!")
 
 if __name__ == "__main__":
