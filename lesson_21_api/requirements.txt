@@ -3,4 +3,5 @@ uvicorn[standard]
 gradio
 transformers
 torch
+torchvision
 pillow

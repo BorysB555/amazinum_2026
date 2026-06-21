@@ -1,71 +1,81 @@
-# model/predictor.py
-from transformers import pipeline
+from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 from PIL import Image
 import numpy as np
+import torch
 
 class SegmentationPredictor:
     def __init__(self):
-        # pipeline — це та сама функція що в лекції,
-        # просто інша задача: image-segmentation замість image-classification
-        # device=-1 означає CPU (як в лекції)
-        self.pipe = pipeline(
-            "image-segmentation",
-            model="nvidia/segformer-b0-finetuned-ade-512-512",
-            device=-1
-        )
+        model_name = "nvidia/segformer-b0-finetuned-ade-512-512"
+
+        self.processor = SegformerImageProcessor.from_pretrained(model_name)
+        self.model = SegformerForSemanticSegmentation.from_pretrained(model_name)
+        self.model.eval()
+
+        self.labels = self.model.config.id2label
 
     def predict(self, image: Image.Image) -> dict:
-        """
-        Приймає PIL Image, повертає словник з результатами.
-        Кожен елемент results — це один знайдений об'єкт з:
-          - 'label'  : назва класу (наприклад 'sky', 'car')
-          - 'score'  : впевненість моделі (0.0 — 1.0)
-          - 'mask'   : бінарна маска (PIL Image, чорно-біла)
-        """
-        results = self.pipe(image)
+        inputs = self.processor(images=image, return_tensors="pt")
 
-        output = []
-        for item in results:
-            output.append({
-                "label": item["label"],
-                "score": round(item["score"], 3),
-            })
+        with torch.no_grad():
+            outputs = self.model(**inputs)
 
-        return {
-            "segments": output,
-            "total": len(output)
-        }
+        logits = outputs.logits
+        predicted = logits.argmax(dim=1)[0]
+
+        unique, counts = torch.unique(predicted, return_counts=True)
+        total_pixels = predicted.numel()
+
+        segments = []
+        for class_id, count in zip(unique.tolist(), counts.tolist()):
+            score = round(count / total_pixels, 3)
+            if score > 0.01:
+                segments.append({
+                    "label": self.labels[class_id],
+                    "score": score
+                })
+
+        segments.sort(key=lambda x: x["score"], reverse=True)
+
+        return {"segments": segments, "total": len(segments)}
 
     def predict_with_overlay(self, image: Image.Image) -> Image.Image:
-        """
-        Повертає зображення з накладеними кольоровими масками —
-        зручно для Gradio щоб показати результат візуально.
-        """
-        results = self.pipe(image)
+        inputs = self.processor(images=image, return_tensors="pt")
 
-        img_array = np.array(image.convert("RGB"))
+        with torch.no_grad():
+            outputs = self.model(**inputs)
 
-        # Кольори для різних класів (BGR)
+        logits = outputs.logits
+        upsampled = torch.nn.functional.interpolate(
+            logits,
+            size=image.size[::-1],
+            mode="bilinear",
+            align_corners=False
+        )
+        predicted = upsampled.argmax(dim=1)[0].numpy()
+
+
+
         colors = [
             (255, 0, 0), (0, 255, 0), (0, 0, 255),
             (255, 255, 0), (255, 0, 255), (0, 255, 255),
             (128, 0, 0), (0, 128, 0), (0, 0, 128),
+            (255, 128, 0), (128, 0, 255), (0, 128, 255),
         ]
 
-        for i, item in enumerate(results):
-            color = colors[i % len(colors)]
-            mask_array = np.array(item["mask"]) 
+        img_array = np.array(image.convert("RGB")).astype(np.float32)
+        overlay = img_array.copy()
 
-            # Там де маска = True — фарбуємо з прозорістю 40%
-            where_mask = mask_array > 128
+        for class_id in np.unique(predicted):
+            color = colors[class_id % len(colors)]
+            mask = predicted == class_id
             for c, val in enumerate(color):
-                img_array[:, :, c] = np.where(
-                    where_mask,
-                    img_array[:, :, c] * 0.6 + val * 0.4,
-                    img_array[:, :, c]
-                ).astype(np.uint8)
+                overlay[:, :, c] = np.where(
+                    mask,
+                    img_array[:, :, c] * 0.5 + val * 0.5,
+                    overlay[:, :, c]
+                )
 
-        return Image.fromarray(img_array)
+        return Image.fromarray(overlay.astype(np.uint8))
 
 
 predictor = SegmentationPredictor()
